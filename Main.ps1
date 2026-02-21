@@ -4,20 +4,32 @@ $RepoBase = "https://raw.githubusercontent.com/crazy-invader135/Roblox-Auto-Cust
 $RemoteVersionURL = "$RepoBase/version.txt"
 $RemoteScriptURL  = "$RepoBase/Main.ps1"
 
-# --- 1. Check for Updates ---
+# --- 1. Silent Update Check (Fixed to prevent crashing) ---
 try {
-    # This checks your version.txt on GitHub
-    $OnlineVersion = (Invoke-WebRequest -Uri $RemoteVersionURL -UseBasicParsing -TimeoutSec 5).Content.Trim()
+    # Set a very short timeout so the app doesn't hang if GitHub is slow
+    $OnlineVersion = (Invoke-WebRequest -Uri $RemoteVersionURL -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop).Content.Trim()
     if ($OnlineVersion -gt $LocalVersion) {
         $CurrentScript = $MyInvocation.MyCommand.Path
-        Invoke-WebRequest -Uri $RemoteScriptURL -OutFile $CurrentScript
-        # Restart the script to apply the update
-        Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$CurrentScript"""
-        exit
+        if ($CurrentScript) {
+            Invoke-WebRequest -Uri $RemoteScriptURL -OutFile $CurrentScript -ErrorAction Stop
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$CurrentScript"""
+            exit
+        }
     }
-} catch { }
+} catch {
+    # If anything fails (no internet, 404, etc.), we just ignore it and continue to the app
+}
 
-# --- 2. Hide Console ---
+# --- 2. GUI & Path Logic ---
+# Force the path to the AppData folder to ensure it NEVER returns null
+$AppName = "RobloxSkyManager"
+$InstallDir = Join-Path $env:LOCALAPPDATA $AppName
+if (-not (Test-Path $InstallDir)) { New-Item -Path $InstallDir -ItemType Directory -Force }
+
+$configPath = Join-Path $InstallDir "config.json"
+$startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk"
+
+# Hide Console
 $memberDefinition = @'[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'@
 $type = Add-Type -MemberDefinition $memberDefinition -Name "Win32ShowWindow" -Namespace "Win32" -PassThru
 $hwnd = (Get-Process -Id $PID).MainWindowHandle
@@ -25,16 +37,7 @@ if ($hwnd -ne [IntPtr]::Zero) { [void]$type::ShowWindow($hwnd, 0) }
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
-# --- 3. Persistent Path Logic (FIXES NULL PATH ERROR) ---
-$AppName = "RobloxSkyManager"
-$InstallDir = Join-Path $env:LOCALAPPDATA $AppName
-if (-not (Test-Path $InstallDir)) { New-Item -Path $InstallDir -ItemType Directory }
-
-$configPath = Join-Path $InstallDir "config.json"
-$startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk"
-$timer = New-Object System.Windows.Forms.Timer
-
-# --- 4. GUI Setup ---
+# --- 3. GUI Setup ---
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Roblox Sky Manager"; $form.Size = "420, 520"; $form.StartPosition = "CenterScreen"; $form.FormBorderStyle = "FixedDialog"
 
@@ -46,7 +49,7 @@ $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $menuOpen = $contextMenu.Items.Add("Open GUI"); $menuSync = $contextMenu.Items.Add("Sync Now"); $menuExit = $contextMenu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $contextMenu
 
-# GUI Controls
+# GUI Elements
 $label = New-Object System.Windows.Forms.Label; $label.Text = "Select custom texture folder:"; $label.Location = "20, 20"; $label.Size = "350, 20"; $form.Controls.Add($label)
 $pathDisplay = New-Object System.Windows.Forms.TextBox; $pathDisplay.Location = "20, 45"; $pathDisplay.Size = "280, 20"; $pathDisplay.ReadOnly = $true; $form.Controls.Add($pathDisplay)
 $btnBrowse = New-Object System.Windows.Forms.Button; $btnBrowse.Text = "Browse..."; $btnBrowse.Location = "310, 43"; $form.Controls.Add($btnBrowse)
@@ -57,7 +60,10 @@ $btnRun = New-Object System.Windows.Forms.Button; $btnRun.Text = "Apply Once Now
 $btnTray = New-Object System.Windows.Forms.Button; $btnTray.Text = "Minimize to System Tray"; $btnTray.Location = "20, 230"; $btnTray.Size = "365, 30"; $form.Controls.Add($btnTray)
 $statusLabel = New-Object System.Windows.Forms.Label; $statusLabel.Text = "Ready."; $statusLabel.Location = "20, 280"; $statusLabel.Size = "365, 100"; $form.Controls.Add($statusLabel)
 
-# --- 5. Logic Functions ---
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 600000
+
+# --- 4. Logic Functions ---
 function Save-Config {
     $config = @{ SourcePath = $pathDisplay.Text; AutoSync = $chkSync.Checked; RunOnBoot = $chkBoot.Checked }
     $config | ConvertTo-Json | Out-File $configPath
@@ -85,26 +91,27 @@ function Sync-Textures {
     }
 }
 
-# --- 6. Event Listeners ---
+# --- 5. Event Listeners ---
 $btnBrowse.Add_Click({ $browser = New-Object System.Windows.Forms.FolderBrowserDialog; if ($browser.ShowDialog() -eq "OK") { $pathDisplay.Text = $browser.SelectedPath; Save-Config } })
 $btnPreview.Add_Click({ if (Test-Path $pathDisplay.Text) { $img = Join-Path $pathDisplay.Text "! SCREENSHOT.png"; if (Test-Path $img) { Start-Process $img } } })
 $btnRun.Add_Click({ Sync-Textures })
 $btnTray.Add_Click({ $form.Hide() })
 $menuSync.Add_Click({ Sync-Textures })
-$notifyIcon.Add_DoubleClick({ $form.Show(); $form.WindowState = "Normal" })
-$menuOpen.Add_Click({ $form.Show(); $form.WindowState = "Normal" })
+$notifyIcon.Add_DoubleClick({ $form.Show(); $form.WindowState = "Normal"; $form.Activate() })
+$menuOpen.Add_Click({ $form.Show(); $form.WindowState = "Normal"; $form.Activate() })
 $menuExit.Add_Click({ $notifyIcon.Dispose(); $form.Close(); [Environment]::Exit(0) })
-$timer.Interval = 600000; $timer.Add_Tick({ if ($chkSync.Checked) { Sync-Textures } })
+$timer.Add_Tick({ if ($chkSync.Checked) { Sync-Textures } })
 $chkBoot.Add_CheckedChanged({
     if ($chkBoot.Checked) {
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut($startupPath)
-        $Shortcut.TargetPath = "powershell.exe"; $Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$($MyInvocation.MyCommand.Path)"" -Background"; $Shortcut.Save()
+        # Point back to the Main.ps1 in AppData
+        $Shortcut.TargetPath = "powershell.exe"; $Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$(Join-Path $InstallDir 'Main.ps1')"" -Background"; $Shortcut.Save()
     } else { if (Test-Path $startupPath) { Remove-Item $startupPath } }
     Save-Config
 })
 
-# --- 7. Execution ---
+# --- 6. Execution ---
 Load-Config
-$args -contains "-Background" ? $form.Hide() : $form.Show()
+if ($args -contains "-Background") { $form.Hide() } else { $form.Show() }
 [System.Windows.Forms.Application]::Run($form)
