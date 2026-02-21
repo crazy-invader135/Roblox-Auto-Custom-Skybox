@@ -6,16 +6,18 @@ $RemoteScriptURL  = "$RepoBase/Main.ps1"
 
 # --- 1. Check for Updates ---
 try {
+    # This checks your version.txt on GitHub
     $OnlineVersion = (Invoke-WebRequest -Uri $RemoteVersionURL -UseBasicParsing -TimeoutSec 5).Content.Trim()
     if ($OnlineVersion -gt $LocalVersion) {
         $CurrentScript = $MyInvocation.MyCommand.Path
         Invoke-WebRequest -Uri $RemoteScriptURL -OutFile $CurrentScript
+        # Restart the script to apply the update
         Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$CurrentScript"""
         exit
     }
 } catch { }
 
-# --- 2. Hide Console & Setup ---
+# --- 2. Hide Console ---
 $memberDefinition = @'[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);'@
 $type = Add-Type -MemberDefinition $memberDefinition -Name "Win32ShowWindow" -Namespace "Win32" -PassThru
 $hwnd = (Get-Process -Id $PID).MainWindowHandle
@@ -23,7 +25,7 @@ if ($hwnd -ne [IntPtr]::Zero) { [void]$type::ShowWindow($hwnd, 0) }
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
-# --- 3. Persistent Path Logic (Fixes the "Path is null" error) ---
+# --- 3. Persistent Path Logic (FIXES NULL PATH ERROR) ---
 $AppName = "RobloxSkyManager"
 $InstallDir = Join-Path $env:LOCALAPPDATA $AppName
 if (-not (Test-Path $InstallDir)) { New-Item -Path $InstallDir -ItemType Directory }
@@ -44,6 +46,7 @@ $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $menuOpen = $contextMenu.Items.Add("Open GUI"); $menuSync = $contextMenu.Items.Add("Sync Now"); $menuExit = $contextMenu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $contextMenu
 
+# GUI Controls
 $label = New-Object System.Windows.Forms.Label; $label.Text = "Select custom texture folder:"; $label.Location = "20, 20"; $label.Size = "350, 20"; $form.Controls.Add($label)
 $pathDisplay = New-Object System.Windows.Forms.TextBox; $pathDisplay.Location = "20, 45"; $pathDisplay.Size = "280, 20"; $pathDisplay.ReadOnly = $true; $form.Controls.Add($pathDisplay)
 $btnBrowse = New-Object System.Windows.Forms.Button; $btnBrowse.Text = "Browse..."; $btnBrowse.Location = "310, 43"; $form.Controls.Add($btnBrowse)
@@ -54,7 +57,7 @@ $btnRun = New-Object System.Windows.Forms.Button; $btnRun.Text = "Apply Once Now
 $btnTray = New-Object System.Windows.Forms.Button; $btnTray.Text = "Minimize to System Tray"; $btnTray.Location = "20, 230"; $btnTray.Size = "365, 30"; $form.Controls.Add($btnTray)
 $statusLabel = New-Object System.Windows.Forms.Label; $statusLabel.Text = "Ready."; $statusLabel.Location = "20, 280"; $statusLabel.Size = "365, 100"; $form.Controls.Add($statusLabel)
 
-# --- 5. Functions ---
+# --- 5. Logic Functions ---
 function Save-Config {
     $config = @{ SourcePath = $pathDisplay.Text; AutoSync = $chkSync.Checked; RunOnBoot = $chkBoot.Checked }
     $config | ConvertTo-Json | Out-File $configPath
@@ -82,7 +85,7 @@ function Sync-Textures {
     }
 }
 
-# --- 6. Listeners ---
+# --- 6. Event Listeners ---
 $btnBrowse.Add_Click({ $browser = New-Object System.Windows.Forms.FolderBrowserDialog; if ($browser.ShowDialog() -eq "OK") { $pathDisplay.Text = $browser.SelectedPath; Save-Config } })
 $btnPreview.Add_Click({ if (Test-Path $pathDisplay.Text) { $img = Join-Path $pathDisplay.Text "! SCREENSHOT.png"; if (Test-Path $img) { Start-Process $img } } })
 $btnRun.Add_Click({ Sync-Textures })
