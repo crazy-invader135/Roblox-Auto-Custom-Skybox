@@ -1,10 +1,29 @@
-# --- 1. Path & Identity Setup ---
+# --- 1. Version & Update Config ---
+$LocalVersion = "1.0.1"
+$RepoBase = "https://raw.githubusercontent.com/crazy-invader135/Roblox-Auto-Custom-Skybox/main"
+$RemoteVersionURL = "$RepoBase/version.txt"
+$RemoteScriptURL  = "$RepoBase/Main.ps1"
+
+# --- 2. Silent Update Check ---
+try {
+    $OnlineVersion = (Invoke-WebRequest -Uri $RemoteVersionURL -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop).Content.Trim()
+    if ($OnlineVersion -gt $LocalVersion) {
+        $CurrentScript = $MyInvocation.MyCommand.Path
+        if ($CurrentScript) {
+            Invoke-WebRequest -Uri $RemoteScriptURL -OutFile $CurrentScript -ErrorAction Stop
+            Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$CurrentScript"""
+            exit
+        }
+    }
+} catch { }
+
+# --- 3. Path & Identity Setup ---
 $AppName = "RobloxSkyManager"
 $InstallDir = Join-Path $env:LOCALAPPDATA $AppName
 if (-not (Test-Path $InstallDir)) { New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null }
 $configPath = Join-Path $InstallDir "config.json"
 
-# --- 2. Safe Console Hiding ---
+# --- 4. Safe Console Hiding (Compatible with PS 5.1) ---
 try {
     $memberDefinition = @"
 [DllImport("user32.dll")]
@@ -17,21 +36,7 @@ public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
-# --- 3. Update Logic ---
-$LocalVersion = "1.0.0"
-$RepoBase = "https://raw.githubusercontent.com/crazy-invader135/Roblox-Auto-Custom-Skybox/main"
-
-try {
-    $OnlineVersion = (Invoke-WebRequest -Uri "$RepoBase/version.txt" -UseBasicParsing -TimeoutSec 2).Content.Trim()
-    if ($OnlineVersion -gt $LocalVersion) {
-        $CurrentScript = $MyInvocation.MyCommand.Path
-        Invoke-WebRequest -Uri "$RepoBase/Main.ps1" -OutFile $CurrentScript
-        Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$CurrentScript"""
-        exit
-    }
-} catch { }
-
-# --- 4. GUI Setup ---
+# --- 5. GUI Setup ---
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Roblox Sky Manager"; $form.Size = "420, 520"; $form.StartPosition = "CenterScreen"; $form.FormBorderStyle = "FixedDialog"
 
@@ -43,7 +48,6 @@ $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $menuOpen = $contextMenu.Items.Add("Open GUI"); $menuSync = $contextMenu.Items.Add("Sync Now"); $menuExit = $contextMenu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $contextMenu
 
-# GUI Controls
 $label = New-Object System.Windows.Forms.Label; $label.Text = "Select custom texture folder:"; $label.Location = "20, 20"; $label.Size = "350, 20"; $form.Controls.Add($label)
 $pathDisplay = New-Object System.Windows.Forms.TextBox; $pathDisplay.Location = "20, 45"; $pathDisplay.Size = "280, 20"; $pathDisplay.ReadOnly = $true; $form.Controls.Add($pathDisplay)
 $btnBrowse = New-Object System.Windows.Forms.Button; $btnBrowse.Text = "Browse..."; $btnBrowse.Location = "310, 43"; $form.Controls.Add($btnBrowse)
@@ -57,7 +61,7 @@ $statusLabel = New-Object System.Windows.Forms.Label; $statusLabel.Text = "Ready
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 600000
 
-# --- 5. Functions ---
+# --- 6. Logic Functions ---
 function Save-Config {
     $config = @{ SourcePath = $pathDisplay.Text; AutoSync = $chkSync.Checked; RunOnBoot = $chkBoot.Checked }
     $config | ConvertTo-Json | Out-File $configPath
@@ -77,15 +81,25 @@ function Sync-Textures {
         $statusLabel.Text = "Waiting: Roblox is currently open."
         return 
     }
+
     $basePath = "$env:LOCALAPPDATA\Roblox\Versions"
-    $found = Get-ChildItem -Path $basePath -Recurse -Filter "sky512_up.tex" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) {
-        Get-ChildItem -Path $pathDisplay.Text -Filter "sky512_*.tex" | ForEach-Object { Copy-Item $_.FullName -Destination $found.DirectoryName -Force }
-        $statusLabel.Text = "Last Sync: $(Get-Date -Format 'HH:mm:ss')`nApplied to: $($found.DirectoryName)"
+    $latestVersion = Get-ChildItem -Path $basePath -Directory | 
+                     Sort-Object LastWriteTime -Descending | 
+                     Where-Object { Test-Path (Join-Path $_.FullName "PlatformContent\pc\textures") } | 
+                     Select-Object -First 1
+
+    if ($latestVersion) {
+        $destinationPath = Join-Path $latestVersion.FullName "PlatformContent\pc\textures"
+        Get-ChildItem -Path $pathDisplay.Text -Filter "sky512_*.tex" | ForEach-Object { 
+            Copy-Item $_.FullName -Destination $destinationPath -Force 
+        }
+        $statusLabel.Text = "Last Sync: $(Get-Date -Format 'HH:mm:ss')`nApplied to: $($latestVersion.Name)"
+    } else {
+        $statusLabel.Text = "Error: Could not find Roblox texture folder."
     }
 }
 
-# --- 6. Event Listeners ---
+# --- 7. Event Listeners ---
 $btnBrowse.Add_Click({ $browser = New-Object System.Windows.Forms.FolderBrowserDialog; if ($browser.ShowDialog() -eq "OK") { $pathDisplay.Text = $browser.SelectedPath; Save-Config } })
 $btnPreview.Add_Click({ if (Test-Path $pathDisplay.Text) { $img = Join-Path $pathDisplay.Text "! SCREENSHOT.png"; if (Test-Path $img) { Start-Process $img } } })
 $btnRun.Add_Click({ Sync-Textures })
@@ -96,15 +110,16 @@ $menuOpen.Add_Click({ $form.Show(); $form.WindowState = "Normal"; $form.Activate
 $menuExit.Add_Click({ $notifyIcon.Dispose(); $form.Close(); [Environment]::Exit(0) })
 $timer.Add_Tick({ if ($chkSync.Checked) { Sync-Textures } })
 $chkBoot.Add_CheckedChanged({
+    $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk"
     if ($chkBoot.Checked) {
         $WshShell = New-Object -ComObject WScript.Shell
-        $Shortcut = $WshShell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk")
+        $Shortcut = $WshShell.CreateShortcut($startupPath)
         $Shortcut.TargetPath = "powershell.exe"; $Shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""$(Join-Path $InstallDir 'Main.ps1')"" -Background"; $Shortcut.Save()
-    } else { if (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk") { Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\RobloxSkyAuto.lnk" } }
+    } else { if (Test-Path $startupPath) { Remove-Item $startupPath } }
     Save-Config
 })
 
-# --- 7. Execution ---
+# --- 8. Execution ---
 Load-Config
 if ($args -contains "-Background") { $form.Hide() } else { $form.Show() }
 [System.Windows.Forms.Application]::Run($form)
