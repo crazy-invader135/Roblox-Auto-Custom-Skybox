@@ -1,5 +1,5 @@
 # --- 1. Version & Update Config ---
-$LocalVersion = "1.0.1"
+$LocalVersion = "1.0.2"
 $RepoBase = "https://raw.githubusercontent.com/crazy-invader135/Roblox-Auto-Custom-Skybox/main"
 $RemoteVersionURL = "$RepoBase/version.txt"
 $RemoteScriptURL  = "$RepoBase/Main.ps1"
@@ -58,10 +58,19 @@ $btnRun = New-Object System.Windows.Forms.Button; $btnRun.Text = "Apply Once Now
 $btnTray = New-Object System.Windows.Forms.Button; $btnTray.Text = "Minimize to System Tray"; $btnTray.Location = "20, 230"; $btnTray.Size = "365, 30"; $form.Controls.Add($btnTray)
 $statusLabel = New-Object System.Windows.Forms.Label; $statusLabel.Text = "Ready."; $statusLabel.Location = "20, 280"; $statusLabel.Size = "365, 100"; $form.Controls.Add($statusLabel)
 
+# --- Version Display Label ---
+$versionLabel = New-Object System.Windows.Forms.Label
+$versionLabel.Text = "v$LocalVersion"
+$versionLabel.Location = "340, 455"
+$versionLabel.Size = "50, 20"
+$versionLabel.ForeColor = "Gray"
+$versionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 8)
+$form.Controls.Add($versionLabel)
+
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 600000
 
-# --- 6. Logic Functions ---
+# --- 6. Core Logic Functions ---
 function Save-Config {
     $config = @{ SourcePath = $pathDisplay.Text; AutoSync = $chkSync.Checked; RunOnBoot = $chkBoot.Checked }
     $config | ConvertTo-Json | Out-File $configPath
@@ -76,26 +85,45 @@ function Load-Config {
 }
 
 function Sync-Textures {
-    if (-not $pathDisplay.Text -or -not (Test-Path $pathDisplay.Text)) { return }
+    if (-not $pathDisplay.Text -or -not (Test-Path $pathDisplay.Text)) { 
+        $statusLabel.Text = "Error: Select a source folder first."
+        return 
+    }
+
     if (Get-Process -Name "RobloxPlayerBeta" -ErrorAction SilentlyContinue) {
-        $statusLabel.Text = "Waiting: Roblox is currently open."
+        $statusLabel.Text = "Waiting: Close Roblox first!"
         return 
     }
 
     $basePath = "$env:LOCALAPPDATA\Roblox\Versions"
-    $latestVersion = Get-ChildItem -Path $basePath -Directory | 
-                     Sort-Object LastWriteTime -Descending | 
-                     Where-Object { Test-Path (Join-Path $_.FullName "PlatformContent\pc\textures") } | 
-                     Select-Object -First 1
+    $versionFolders = Get-ChildItem -Path $basePath -Directory
+    $updatedCount = 0
 
-    if ($latestVersion) {
-        $destinationPath = Join-Path $latestVersion.FullName "PlatformContent\pc\textures"
-        Get-ChildItem -Path $pathDisplay.Text -Filter "sky512_*.tex" | ForEach-Object { 
-            Copy-Item $_.FullName -Destination $destinationPath -Force 
+    $customFiles = Get-ChildItem -Path $pathDisplay.Text | Where-Object { $_.Name -like "sky512_*" }
+    
+    if ($customFiles.Count -eq 0) {
+        $statusLabel.Text = "Error: No 'sky512_*' files found!"
+        return
+    }
+
+    foreach ($folder in $versionFolders) {
+        $texPath = Join-Path $folder.FullName "PlatformContent\pc\textures"
+        if (Test-Path $texPath) {
+            foreach ($file in $customFiles) {
+                try {
+                    $targetName = $file.BaseName + ".tex"
+                    $targetPath = Join-Path $texPath $targetName
+                    Copy-Item -Path $file.FullName -Destination $targetPath -Force -ErrorAction SilentlyContinue
+                } catch { }
+            }
+            $updatedCount++
         }
-        $statusLabel.Text = "Last Sync: $(Get-Date -Format 'HH:mm:ss')`nApplied to: $($latestVersion.Name)"
+    }
+
+    if ($updatedCount -gt 0) {
+        $statusLabel.Text = "Success!`nUpdated $updatedCount Roblox version folders.`nTime: $(Get-Date -Format 'HH:mm:ss')"
     } else {
-        $statusLabel.Text = "Error: Could not find Roblox texture folder."
+        $statusLabel.Text = "Error: No Roblox folders found."
     }
 }
 
